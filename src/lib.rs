@@ -1,4 +1,3 @@
-use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Result, Seek, Write};
 use std::path::Path;
@@ -20,6 +19,7 @@ struct PageHeader {
     pub higher: u16,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 enum DataField {
     Text(String),
     Integer(u16),
@@ -141,7 +141,7 @@ impl Storage {
         self.write_metadata(page, &page_header);
     }
 
-    fn read_page(&self, page: &Vec<u8>) {
+    fn read_page(&self, page: &Vec<u8>) -> Vec<Vec<DataField>> {
         let mut pointers = Vec::new();
         let page_header = self.read_metadata(page);
         let mut offset = self.page_header_offsets.end_headers as usize;
@@ -151,20 +151,26 @@ impl Storage {
             ));
             offset += 2;
         }
+        let mut rows = Vec::new();
         for pointer in pointers {
+            let mut row = Vec::new();
             let mut offset = pointer as usize;
             let mut num_of_fields =
                 u16::from_le_bytes(page[offset..offset + 2].try_into().unwrap());
             offset += 2;
+            let mut datatype_nums = Vec::new();
             while num_of_fields != 0 {
                 let datatype_num = u16::from_le_bytes(page[offset..offset + 2].try_into().unwrap());
-                println!("{}", offset);
+                datatype_nums.push(datatype_num);
                 offset += 2;
+                num_of_fields -= 1;
+            }
+            for datatype_num in datatype_nums {
                 match datatype_num {
                     1 => {
                         let integer =
                             u16::from_le_bytes(page[offset..offset + 2].try_into().unwrap());
-                        println!("{}", integer);
+                        row.push(DataField::Integer(integer));
                         offset += 2;
                     }
                     2 => {
@@ -174,14 +180,15 @@ impl Storage {
                         offset += 2;
                         let text =
                             String::from_utf8(page[offset..offset + text_length].to_vec()).unwrap();
-                        println!("{}", text);
+                        row.push(DataField::Text(text));
                         offset += text_length;
                     }
                     _ => panic!("invalid number"),
                 }
-                num_of_fields -= 1;
             }
+            rows.push(row);
         }
+        rows
     }
 
     fn create_page(&self) -> Result<Vec<u8>> {
@@ -207,6 +214,7 @@ mod tests {
         let data_fields = vec![DataField::Text("data".to_string()), DataField::Integer(10)];
         storage.write_page(&mut page, &data_fields);
         let page_headers = storage.read_metadata(&page);
-        storage.read_page(&page);
+        let rows = storage.read_page(&page);
+        assert_eq!(rows, vec![data_fields]);
     }
 }
