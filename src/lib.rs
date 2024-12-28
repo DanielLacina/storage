@@ -10,6 +10,7 @@ struct PageHeaderOffsets {
     pub id: (usize, usize),
     pub lower: (usize, usize),
     pub higher: (usize, usize),
+    pub end_headers: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ impl Storage {
                 id: (0, 2),
                 lower: (2, 4),
                 higher: (4, 6),
+                end_headers: 6,
             },
         }
     }
@@ -139,6 +141,49 @@ impl Storage {
         self.write_metadata(page, &page_header);
     }
 
+    fn read_page(&self, page: &Vec<u8>) {
+        let mut pointers = Vec::new();
+        let page_header = self.read_metadata(page);
+        let mut offset = self.page_header_offsets.end_headers as usize;
+        while offset <= (page_header.lower - 2) as usize {
+            pointers.push(u16::from_le_bytes(
+                page[offset..offset + 2].try_into().unwrap(),
+            ));
+            offset += 2;
+        }
+        for pointer in pointers {
+            let mut offset = pointer as usize;
+            let mut num_of_fields =
+                u16::from_le_bytes(page[offset..offset + 2].try_into().unwrap());
+            offset += 2;
+            while num_of_fields != 0 {
+                let datatype_num = u16::from_le_bytes(page[offset..offset + 2].try_into().unwrap());
+                println!("{}", offset);
+                offset += 2;
+                match datatype_num {
+                    1 => {
+                        let integer =
+                            u16::from_le_bytes(page[offset..offset + 2].try_into().unwrap());
+                        println!("{}", integer);
+                        offset += 2;
+                    }
+                    2 => {
+                        let text_length =
+                            u16::from_le_bytes(page[offset..offset + 2].try_into().unwrap())
+                                as usize;
+                        offset += 2;
+                        let text =
+                            String::from_utf8(page[offset..offset + text_length].to_vec()).unwrap();
+                        println!("{}", text);
+                        offset += text_length;
+                    }
+                    _ => panic!("invalid number"),
+                }
+                num_of_fields -= 1;
+            }
+        }
+    }
+
     fn create_page(&self) -> Result<Vec<u8>> {
         let mut page = self.default_page();
         let page_header = PageHeader {
@@ -161,8 +206,7 @@ mod tests {
         let mut page = storage.create_page().unwrap();
         let data_fields = vec![DataField::Text("data".to_string()), DataField::Integer(10)];
         storage.write_page(&mut page, &data_fields);
-        println!("{:?}", page);
         let page_headers = storage.read_metadata(&page);
-        println!("{:?}", page_headers);
+        storage.read_page(&page);
     }
 }
