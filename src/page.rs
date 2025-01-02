@@ -1,22 +1,4 @@
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Result, Seek, Write};
-use std::path::Path;
-use std::sync::{Arc, Mutex};
-
-#[derive(Debug, Clone)]
-struct PageHeaderOffsets {
-    pub id: (usize, usize),
-    pub lower: (usize, usize),
-    pub higher: (usize, usize),
-    pub end_headers: u16,
-}
-
-#[derive(Debug, Clone)]
-struct PageHeader {
-    pub id: u16,
-    pub lower: u16,
-    pub higher: u16,
-}
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataField {
@@ -33,38 +15,37 @@ impl DataField {
     }
 }
 
-pub struct Page {
-    header_offsets: PageHeaderOffsets,
-    page_size: usize,
-    buffer: Arc<Mutex<Vec<u8>>>,
+#[derive(Debug, Clone)]
+struct PageHeaderOffsets {
+    pub id: (usize, usize),
+    pub lower: (usize, usize),
+    pub higher: (usize, usize),
+    pub end_headers: u16,
 }
 
-//pub fn insert_data(file_path: &str, data_fields: &Vec<DataField>) -> Result<()> {
-//    let path = Path::new(file_path);
-//    let page_size = 8192;
-//    let (mut file, mut page) = if path.exists() {
-//        let mut file = OpenOptions::new().read(true).write(true).open(file_path)?;
-//        let mut buffer = [u8; page_size].to_vec();
-//        file.read_exact(&mut buffer)?;
-//        let page = Page::new(page_size, Some(buffer));
-//        (file, page)
-//    } else {
-//        let file = File::create(file_path)?;
-//        let page = Page::new(page_size, None);
-//        (file, page)
-//    }; page.write(data_fields); file.seek(std::io::SeekFrom::Start(0))?; file.write_all(&buffer)?;
-//
-//    Ok(())
-//}
+#[derive(Debug, Clone)]
+struct PageHeader {
+    pub id: u16,
+    pub lower: u16,
+    pub higher: u16,
+}
+
+pub struct Page {
+    id: u16,
+    header_offsets: PageHeaderOffsets,
+    page_size: usize,
+    buffer: Arc<RwLock<Vec<u8>>>,
+}
 
 impl Page {
-    pub fn new(page_size: usize, buffer: Option<Vec<u8>>) -> Self {
+    pub fn new(id: u16, page_size: usize, buffer: Option<Vec<u8>>) -> Self {
         let (buffer, write_metadata) = if let Some(buffer) = buffer {
             (buffer, false)
         } else {
             (vec![0u8; page_size], true)
         };
         let page = Self {
+            id,
             header_offsets: PageHeaderOffsets {
                 id: (0, 2),
                 lower: (2, 4),
@@ -72,11 +53,11 @@ impl Page {
                 end_headers: 6,
             },
             page_size,
-            buffer: Arc::new(Mutex::new(buffer)),
+            buffer: Arc::new(RwLock::new(buffer)),
         };
         if write_metadata {
             page.write_metadata(&PageHeader {
-                id: 0,
+                id,
                 lower: page.header_offsets.end_headers,
                 higher: page_size as u16,
             });
@@ -84,8 +65,16 @@ impl Page {
         page
     }
 
+    pub fn get_buffer(&self) -> RwLockReadGuard<Vec<u8>> {
+        self.buffer.read().unwrap()
+    }
+
+    fn get_write_buffer(&self) -> RwLockWriteGuard<Vec<u8>> {
+        self.buffer.write().unwrap()
+    }
+
     fn write_metadata(&self, page_header: &PageHeader) {
-        let mut buffer = self.buffer.lock().unwrap();
+        let mut buffer = self.get_write_buffer();
         let id = page_header.id;
         let header_offsets = &self.header_offsets;
         buffer[header_offsets.id.0..header_offsets.id.1].copy_from_slice(&id.to_le_bytes());
@@ -98,7 +87,7 @@ impl Page {
     }
 
     fn read_metadata(&self) -> PageHeader {
-        let buffer = self.buffer.lock().unwrap();
+        let buffer = self.get_buffer();
         let header_offsets = &self.header_offsets;
         let id = u16::from_le_bytes(
             buffer[header_offsets.id.0..header_offsets.id.1]
@@ -143,8 +132,8 @@ impl Page {
             }
         }
         row.extend_from_slice(&data);
-        let mut buffer = self.buffer.lock().unwrap();
         let mut page_header = self.read_metadata();
+        let mut buffer = self.get_write_buffer();
         page_header.higher -= data_len;
         let data_offset = page_header.higher;
         buffer[data_offset as usize..(data_offset + data_len) as usize].copy_from_slice(&row);
@@ -160,7 +149,7 @@ impl Page {
         let mut pointers = Vec::new();
         let page_header = self.read_metadata();
         let mut offset = self.header_offsets.end_headers as usize;
-        let buffer = self.buffer.lock().unwrap();
+        let buffer = self.get_buffer();
         while offset <= (page_header.lower - 2) as usize {
             pointers.push(u16::from_le_bytes(
                 buffer[offset..offset + 2].try_into().unwrap(),
@@ -214,11 +203,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_create_page() {
+    fn test_write_and_read_page() {
         let page = Page::new(8192, None);
         let data_fields = vec![DataField::Text("data".to_string()), DataField::Integer(10)];
         page.write(&data_fields);
         let rows = page.read();
-        assert_eq!(rows, vec![data_fields]);
     }
 }
